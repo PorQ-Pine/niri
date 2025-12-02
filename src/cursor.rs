@@ -15,6 +15,13 @@ use smithay::wayland::compositor::with_states;
 use xcursor::parser::{parse_xcursor, Image};
 use xcursor::CursorTheme;
 
+use std::time::{Duration, Instant};
+// 0 is the instant updated every time
+// 1 is the instant that checks for the delay
+static EINK_CURSOR_DELAY: std::sync::Mutex<Option<(Instant, Instant, bool)>> =
+    std::sync::Mutex::new(None);
+const EINK_CURSOR_DELAY_MS: f32 = 1000.0;
+
 /// Some default looking `left_ptr` icon.
 static FALLBACK_CURSOR_DATA: &[u8] = include_bytes!("../resources/cursor.rgba");
 
@@ -60,6 +67,40 @@ impl CursorManager {
 
     /// Get the current rendering cursor.
     pub fn get_render_cursor(&self, scale: i32) -> RenderCursor {
+        {
+            let mutex = EINK_CURSOR_DELAY.lock();
+            if let Ok(mut eink_cursor_delay_option) = mutex {
+                match *eink_cursor_delay_option {
+                    Some(mut eink_cursor_delay) => {
+                        if eink_cursor_delay.0.elapsed() > Duration::from_millis((EINK_CURSOR_DELAY_MS * 0.25) as u64) {
+                            eink_cursor_delay.2 = true;
+                            eink_cursor_delay.1 = Instant::now();
+                            eink_cursor_delay.0 = Instant::now();
+                            *eink_cursor_delay_option = Some(eink_cursor_delay);
+                            // info!("Last cursor was a while ago, starting delay");
+                            return RenderCursor::Hidden;
+                        }
+
+                        if eink_cursor_delay.2 {
+                            // info!("It's in delay mode");
+                            if eink_cursor_delay.1.elapsed() > Duration::from_millis((EINK_CURSOR_DELAY_MS) as u64) {
+                                // info!("Enough time passed in delay mode");
+                                eink_cursor_delay.2 = false;
+                            }
+                            eink_cursor_delay.0 = Instant::now();
+                            *eink_cursor_delay_option = Some(eink_cursor_delay);
+                            return RenderCursor::Hidden;
+                        }
+
+                        eink_cursor_delay.0 = Instant::now();
+                        *eink_cursor_delay_option = Some(eink_cursor_delay);
+                    }
+                    None => {
+                        *eink_cursor_delay_option = Some((Instant::now(), Instant::now(), false));
+                    }
+                }
+            }
+        }
         match self.current_cursor.clone() {
             CursorImageStatus::Hidden => RenderCursor::Hidden,
             CursorImageStatus::Surface(surface) => {
