@@ -148,9 +148,12 @@ dinit = []
 new_without_default = "allow"
 
 [profile.release]
-debug = "line-tables-only"
-overflow-checks = true
-lto = "thin"
+debug = false
+overflow-checks = false
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+strip = true
 
 [profile.release.package.niri-config]
 # knuffel with chomsky generates a metric ton of debuginfo.
