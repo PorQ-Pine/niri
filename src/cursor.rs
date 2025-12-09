@@ -1,3 +1,8 @@
+use std::process::Command;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
@@ -15,15 +20,12 @@ use smithay::wayland::compositor::with_states;
 use xcursor::parser::{parse_xcursor, Image};
 use xcursor::CursorTheme;
 
-use std::time::{Duration, Instant};
-// 0 is the instant updated every time
-// 1 is the instant that checks for the delay
-static EINK_CURSOR_DELAY: std::sync::Mutex<Option<(Instant, Instant, bool)>> =
-    std::sync::Mutex::new(None);
-const EINK_CURSOR_DELAY_MS: f32 = 1000.0;
-
 /// Some default looking `left_ptr` icon.
 static FALLBACK_CURSOR_DATA: &[u8] = include_bytes!("../resources/cursor.rgba");
+
+// Only lower case!
+static HIDDEN_APP_IDS: &'static [&'static str] = &["com.github.xournalpp.xournalpp"];
+static IS_CURSOR_HIDDEN: Mutex<bool> = Mutex::new(false);
 
 type XCursorCache = HashMap<(CursorIcon, i32), Option<Rc<XCursor>>>;
 
@@ -32,6 +34,8 @@ pub struct CursorManager {
     size: u8,
     current_cursor: CursorImageStatus,
     named_cursor_cache: RefCell<XCursorCache>,
+    #[allow(dead_code)]
+    thread_handle: thread::JoinHandle<()>,
 }
 
 impl CursorManager {
@@ -40,11 +44,39 @@ impl CursorManager {
 
         let theme = CursorTheme::load(theme);
 
+        let handle = thread::spawn(|| loop {
+            let mut hidden_this_cycle = false;
+            if let Ok(output) = Command::new("sh")
+                .arg("-c")
+                .arg("niri msg focused-window | awk -F'\"' '/App ID:/ {print $2}'")
+                .output()
+            {
+                let app_id = String::from_utf8_lossy(&output.stdout).trim().to_string().to_lowercase();
+                // info!("app_id: {}", app_id);
+                if !app_id.is_empty() {
+                    if HIDDEN_APP_IDS.contains(&app_id.as_str()) {
+                        hidden_this_cycle = true;
+                    }
+                }
+            } else {
+                error!("Failed to execute niri msg focused-window command.");
+            }
+
+            if let Ok(mut guard) = IS_CURSOR_HIDDEN.lock() {
+                *guard = hidden_this_cycle;
+            } else {
+                error!("Failed to lock IS_CURSOR_HIDDEN mutex.");
+            }
+            // info!("hidden_this_cycle is {}", hidden_this_cycle);
+            thread::sleep(Duration::from_millis(1000));
+        });
+
         Self {
             theme,
             size,
             current_cursor: CursorImageStatus::default_named(),
             named_cursor_cache: Default::default(),
+            thread_handle: handle,
         }
     }
 
@@ -67,40 +99,14 @@ impl CursorManager {
 
     /// Get the current rendering cursor.
     pub fn get_render_cursor(&self, scale: i32) -> RenderCursor {
-        {
-            let mutex = EINK_CURSOR_DELAY.lock();
-            if let Ok(mut eink_cursor_delay_option) = mutex {
-                match *eink_cursor_delay_option {
-                    Some(mut eink_cursor_delay) => {
-                        if eink_cursor_delay.0.elapsed() > Duration::from_millis((EINK_CURSOR_DELAY_MS * 0.25) as u64) {
-                            eink_cursor_delay.2 = true;
-                            eink_cursor_delay.1 = Instant::now();
-                            eink_cursor_delay.0 = Instant::now();
-                            *eink_cursor_delay_option = Some(eink_cursor_delay);
-                            // info!("Last cursor was a while ago, starting delay");
-                            return RenderCursor::Hidden;
-                        }
-
-                        if eink_cursor_delay.2 {
-                            // info!("It's in delay mode");
-                            if eink_cursor_delay.1.elapsed() > Duration::from_millis((EINK_CURSOR_DELAY_MS) as u64) {
-                                // info!("Enough time passed in delay mode");
-                                eink_cursor_delay.2 = false;
-                            }
-                            eink_cursor_delay.0 = Instant::now();
-                            *eink_cursor_delay_option = Some(eink_cursor_delay);
-                            return RenderCursor::Hidden;
-                        }
-
-                        eink_cursor_delay.0 = Instant::now();
-                        *eink_cursor_delay_option = Some(eink_cursor_delay);
-                    }
-                    None => {
-                        *eink_cursor_delay_option = Some((Instant::now(), Instant::now(), false));
-                    }
-                }
+        if let Ok(guard) = IS_CURSOR_HIDDEN.lock() {
+            if *guard {
+                return RenderCursor::Hidden;
             }
+        } else {
+            error!("Failed to lock IS_CURSOR_HIDDEN mutex in get_render_cursor.");
         }
+
         match self.current_cursor.clone() {
             CursorImageStatus::Hidden => RenderCursor::Hidden,
             CursorImageStatus::Surface(surface) => {
