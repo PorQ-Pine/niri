@@ -323,6 +323,13 @@ impl<W: LayoutElement> FloatingSpace<W> {
         })
     }
 
+    pub fn tiles_with_geometry(&self) -> impl Iterator<Item = (&Tile<W>, Rectangle<f64, Logical>)> {
+        self.tiles_with_offsets().map(|(tile, offset)| {
+            let size = tile.tile_size();
+            (tile, Rectangle::new(offset, size))
+        })
+    }
+
     pub fn tiles_with_ipc_layouts(&self) -> impl Iterator<Item = (&Tile<W>, WindowLayout)> {
         let scale = self.scale;
         self.tiles_with_offsets().map(move |(tile, offset)| {
