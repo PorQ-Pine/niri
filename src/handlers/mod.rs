@@ -1,3 +1,4 @@
+pub mod background_effect;
 mod compositor;
 mod layer_shell;
 mod xdg_shell;
@@ -68,7 +69,7 @@ use smithay::{
     delegate_pointer_gestures, delegate_presentation, delegate_primary_selection,
     delegate_relative_pointer, delegate_seat, delegate_security_context, delegate_session_lock,
     delegate_single_pixel_buffer, delegate_tablet_manager, delegate_text_input_manager,
-    delegate_viewporter, delegate_xdg_activation,
+    delegate_viewporter, delegate_virtual_keyboard_manager, delegate_xdg_activation,
 };
 
 pub use crate::handlers::xdg_shell::KdeDecorationsModeState;
@@ -279,6 +280,7 @@ impl KeyboardShortcutsInhibitHandler for State {
 
 delegate_input_method_manager!(State);
 delegate_keyboard_shortcuts_inhibit!(State);
+delegate_virtual_keyboard_manager!(State);
 
 impl SelectionHandler for State {
     type SelectionUserData = Arc<[u8]>;
@@ -359,7 +361,7 @@ impl DndGrabHandler for State {
         trace!("dnd dropped, target: {target:?}, validated: {validated}");
 
         // End DnD before activating a specific window below so that it takes precedence.
-        self.niri.layout.dnd_end();
+        self.niri.on_maybe_dnd_ended();
 
         // Activate the target output, since that's how Firefox drag-tab-into-new-window works for
         // example. On successful drop, additionally activate the target window.
@@ -381,10 +383,15 @@ impl DndGrabHandler for State {
                 self.niri.layout.focus_output(&output);
             }
         }
+    }
+}
 
-        self.niri.dnd_icon = None;
+impl crate::niri::Niri {
+    pub fn on_maybe_dnd_ended(&mut self) {
+        self.layout.dnd_end();
+        self.dnd_icon = None;
         // FIXME: more granular
-        self.niri.queue_redraw_all();
+        self.queue_redraw_all();
     }
 }
 

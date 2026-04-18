@@ -67,7 +67,7 @@ use crate::frame_clock::FrameClock;
 use crate::niri::{Niri, RedrawState, State};
 use crate::render_helpers::debug::draw_damage;
 use crate::render_helpers::renderer::AsGlesRenderer;
-use crate::render_helpers::{resources, shaders, RenderTarget};
+use crate::render_helpers::{resources, shaders, RenderCtx, RenderTarget};
 use crate::utils::{get_monotonic_time, is_laptop_panel, logical_output, PanelOrientation};
 
 const SUPPORTED_COLOR_FORMATS: [Fourcc; 4] = [
@@ -979,6 +979,32 @@ impl Tty {
                 } => {
                     removed.push(crtc);
                 }
+                // Emitted when the list of connector modes changes at runtime.
+                //
+                // Some devices, notably USB-C docks with DP-MST/alt-mode, report Connected before
+                // the EDID has been read, with an empty mode list. Then, at a later point, the
+                // modes will be populated, at which point we'll get this Changed event.
+                DrmScanEvent::Changed {
+                    connector,
+                    crtc: Some(crtc),
+                } => {
+                    let connector_name = format_connector_name(&connector);
+                    let name = make_output_name(&device.drm, connector.handle(), connector_name);
+                    debug!(
+                        "connector changed: {} \"{}\"",
+                        &name.connector,
+                        name.format_make_model_serial(),
+                    );
+
+                    if !device.known_crtcs.contains_key(&crtc) {
+                        // I guess this can happen if the connector initially wasn't mapped to a
+                        // CRTC but then got mapped before being changed.
+                        warn!("changed connector missing from known crtcs");
+                    }
+
+                    // We don't actually need to do anything here; on_output_config_changed() will
+                    // take care of picking a new mode if needed.
+                }
                 _ => (),
             }
         }
@@ -1393,7 +1419,7 @@ impl Tty {
 
         // Create the compositor.
         let res = DrmCompositor::new(
-            OutputModeSource::Auto(output.clone()),
+            OutputModeSource::Auto(output.downgrade()),
             surface,
             None,
             device.allocator.clone(),
@@ -1423,7 +1449,7 @@ impl Tty {
                     .create_surface(crtc, mode, &[connector.handle()])?;
 
                 DrmCompositor::new(
-                    OutputModeSource::Auto(output.clone()),
+                    OutputModeSource::Auto(output.downgrade()),
                     surface,
                     None,
                     device.allocator.clone(),
@@ -1839,8 +1865,12 @@ impl Tty {
         };
 
         // Render the elements.
-        let mut elements =
-            niri.render::<TtyRenderer>(&mut renderer, output, true, RenderTarget::Output);
+        let ctx = RenderCtx {
+            renderer: &mut renderer,
+            target: RenderTarget::Output,
+            xray: None,
+        };
+        let mut elements = niri.render_to_vec(ctx, output, true);
 
         // Visualize the damage, if enabled.
         if niri.debug_draw_damage {
