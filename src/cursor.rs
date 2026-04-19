@@ -24,7 +24,7 @@ use xcursor::CursorTheme;
 static FALLBACK_CURSOR_DATA: &[u8] = include_bytes!("../resources/cursor.rgba");
 
 // Only lower case!
-static HIDDEN_APP_IDS: &'static [&'static str] = &["com.github.xournalpp.xournalpp", "org.freedesktop.xwayland"];
+static HIDDEN_APP_IDS: &'static [&'static str] = &["com.github.xournalpp.xournalpp", "org.freedesktop.xwayland", "write"];
 static IS_CURSOR_HIDDEN: Mutex<bool> = Mutex::new(false);
 
 type XCursorCache = HashMap<(CursorIcon, i32), Option<Rc<XCursor>>>;
